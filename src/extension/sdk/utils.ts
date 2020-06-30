@@ -1,7 +1,9 @@
+import * as child_process from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import { commands, ExtensionContext, window } from "vscode";
-import { analyzerSnapshotPath, dartExecutableName, dartPlatformName, dartVMPath, DART_DOWNLOAD_URL, flutterExecutableName, flutterPath, FLUTTER_CREATE_PROJECT_TRIGGER_FILE, FLUTTER_DOWNLOAD_URL, isMac, isWin, showLogAction } from "../../shared/constants";
+import * as util from "util";
+import { commands, ExtensionContext, ProgressLocation, window } from "vscode";
+import { analyzerSnapshotPath, dartExecutableName, dartPlatformName, dartVMPath, DART_DOWNLOAD_URL, flutterExecutableName, flutterPath, flutterSnapBinPath, flutterSnapSdkPath, FLUTTER_CREATE_PROJECT_TRIGGER_FILE, FLUTTER_DOWNLOAD_URL, isMac, isWin, showLogAction } from "../../shared/constants";
 import { Logger, WorkspaceConfig } from "../../shared/interfaces";
 import { PackageMap } from "../../shared/pub/package_map";
 import { flatMap, isDartSdkFromFlutter, notUndefined } from "../../shared/utils";
@@ -237,22 +239,39 @@ export class SdkUtils {
 				this.logger.info(`Found Fuchsia project that is not vanilla Flutter`);
 		}
 
-		const flutterSdkSearchPaths = [
-			workspaceConfig?.flutterSdkHome,
-			config.flutterSdkPath,
-			// TODO: These could move into processFuchsiaWorkspace and be set on the config?
-			fuchsiaRoot && path.join(fuchsiaRoot, "lib/flutter"),
-			fuchsiaRoot && path.join(fuchsiaRoot, "third_party/dart-pkg/git/flutter"),
-			firstFlutterMobileProject,
-			firstFlutterMobileProject && extractFlutterSdkPathFromPackagesFile(path.join(firstFlutterMobileProject, ".packages")),
-			firstFlutterMobileProject && path.join(firstFlutterMobileProject, ".flutter"),
-			firstFlutterMobileProject && path.join(firstFlutterMobileProject, "vendor/flutter"),
-			process.env.FLUTTER_ROOT,
-		].concat(paths).filter(notUndefined);
+		var flutterSdkPath;
+		if (fs.existsSync(flutterSnapBinPath)) {
+			flutterSdkPath = flutterSnapSdkPath;
+			// If the Flutter snap is installed but not initialised, initialise it now.
+			if (!fs.existsSync(flutterSnapSdkPath + "/.git")) {
+				await window.withProgress(
+					{
+						location: ProgressLocation.Notification,
+						title: "Initializing Flutter snap"
+					},
+					async () => {
+						await util.promisify(child_process.exec)(flutterSnapBinPath);
+					});
+			}
+		}
+		else {
+			const flutterSdkSearchPaths = [
+				workspaceConfig?.flutterSdkHome,
+				config.flutterSdkPath,
+				// TODO: These could move into processFuchsiaWorkspace and be set on the config?
+				fuchsiaRoot && path.join(fuchsiaRoot, "lib/flutter"),
+				fuchsiaRoot && path.join(fuchsiaRoot, "third_party/dart-pkg/git/flutter"),
+				firstFlutterMobileProject,
+				firstFlutterMobileProject && extractFlutterSdkPathFromPackagesFile(path.join(firstFlutterMobileProject, ".packages")),
+				firstFlutterMobileProject && path.join(firstFlutterMobileProject, ".flutter"),
+				firstFlutterMobileProject && path.join(firstFlutterMobileProject, "vendor/flutter"),
+				process.env.FLUTTER_ROOT,
+			].concat(paths).filter(notUndefined);
 
-		const flutterSdkPath = this.findFlutterSdk(flutterSdkSearchPaths);
-		// Since we just blocked on a lot of sync FS, yield.
-		await resolvedPromise;
+			flutterSdkPath = this.findFlutterSdk(flutterSdkSearchPaths);
+			// Since we just blocked on a lot of sync FS, yield.
+			await resolvedPromise;
+		}
 
 		const dartSdkSearchPaths = [
 			isMac ? workspaceConfig?.dartSdkHomeMac : workspaceConfig?.dartSdkHomeLinux,

@@ -22,6 +22,8 @@ export const pubPath = "bin/" + pubExecutableName;
 export const pubSnapshotPath = "bin/snapshots/pub.dart.snapshot";
 export const analyzerSnapshotPath = "bin/snapshots/analysis_server.dart.snapshot";
 export const flutterPath = "bin/" + flutterExecutableName;
+export const flutterSnapBinPath = "/snap/flutter/current/flutter.sh";
+export const flutterSnapSdkPath = process.env.HOME + "/snap/flutter/common/flutter";
 export const androidStudioPaths = androidStudioExecutableNames.map((s) => "bin/" + s);
 export const DART_DOWNLOAD_URL = "https://dart.dev/get-dart";
 export const FLUTTER_DOWNLOAD_URL = "https://flutter.io/setup/";

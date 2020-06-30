@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as semver from "semver";
-import { flutterExecutableName, isWin } from "./constants";
+import { flutterExecutableName, flutterSnapBinPath, isWin } from "./constants";
 import { LogCategory } from "./enums";
 import { Logger, SomeError } from "./interfaces";
 
@@ -123,6 +123,10 @@ export function usingCustomScript(binPath: string, binArgs: string[], options?: 
 			? options.customScriptReplacesNumArgs
 			: 1; // Default to removing one arg.
 		binArgs = binArgs.slice(numArgsToRemove);
+	}
+	else if (fs.existsSync(flutterSnapBinPath) && binPath.endsWith("/flutter")) {
+		// If installed, use flutter from the snap instead of the SDK path.
+		binPath = flutterSnapBinPath;
 	}
 
 	return { binPath, binArgs };
