@@ -123,8 +123,7 @@ export function usingCustomScript(binPath: string, binArgs: string[], options?: 
 			? options.customScriptReplacesNumArgs
 			: 1; // Default to removing one arg.
 		binArgs = binArgs.slice(numArgsToRemove);
-	}
-	else if (fs.existsSync(flutterSnapBinPath) && binPath.endsWith("/flutter")) {
+	} else if (fs.existsSync(flutterSnapBinPath) && binPath.endsWith("/flutter")) {
 		// If installed, use flutter from the snap instead of the SDK path.
 		binPath = flutterSnapBinPath;
 	}

@@ -239,7 +239,7 @@ export class SdkUtils {
 				this.logger.info(`Found Fuchsia project that is not vanilla Flutter`);
 		}
 
-		var flutterSdkPath;
+		let flutterSdkPath;
 		if (fs.existsSync(flutterSnapBinPath)) {
 			flutterSdkPath = flutterSnapSdkPath;
 			// If the Flutter snap is installed but not initialised, initialise it now.
@@ -247,14 +247,13 @@ export class SdkUtils {
 				await window.withProgress(
 					{
 						location: ProgressLocation.Notification,
-						title: "Initializing Flutter snap"
+						title: "Initializing Flutter snap",
 					},
 					async () => {
 						await util.promisify(child_process.exec)(flutterSnapBinPath);
 					});
 			}
-		}
-		else {
+		} else {
 			const flutterSdkSearchPaths = [
 				workspaceConfig?.flutterSdkHome,
 				config.flutterSdkPath,
