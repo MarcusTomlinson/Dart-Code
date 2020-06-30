@@ -508,7 +508,7 @@ export async function activate(context: vs.ExtensionContext, isRestart: boolean 
 		dartPackagesProvider,
 		packagesTreeView,
 	);
-	const testTreeProvider = new TestResultsProvider();
+	const testTreeProvider = new TestResultsProvider(logger);
 	const testTreeView = vs.window.createTreeView("dartTestTree", { treeDataProvider: testTreeProvider });
 	context.subscriptions.push(
 		testTreeProvider,
@@ -593,7 +593,9 @@ export async function activate(context: vs.ExtensionContext, isRestart: boolean 
 			// Do NOT await this.. the Flutter extension needs to wait for the Dart extension to finish activating
 			// so that it can call its exported API, therefore we'll deadlock if we wait for the Flutter extension
 			// to finish activating.
-			flutterExtension.activate();
+			flutterExtension.activate()
+				// Then rebuild log because it includes whether we activated Flutter.
+				.then(() => buildLogHeaders(workspaceContextUnverified));
 		}
 	}
 

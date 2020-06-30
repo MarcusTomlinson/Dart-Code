@@ -1,8 +1,9 @@
-import { ContinuedEvent, Event, OutputEvent, ProgressUpdateEvent } from "vscode-debugadapter";
+import { ContinuedEvent, Event, OutputEvent } from "vscode-debugadapter";
 import { DebugProtocol } from "vscode-debugprotocol";
 import { FlutterCapabilities } from "../shared/capabilities/flutter";
 import { debugLaunchProgressId, restartReasonManual } from "../shared/constants";
 import { LogCategory, VmServiceExtension } from "../shared/enums";
+import { AppProgress } from "../shared/flutter/daemon_interfaces";
 import { DiagnosticsNode, DiagnosticsNodeLevel, DiagnosticsNodeStyle, DiagnosticsNodeType, FlutterErrorData } from "../shared/flutter/structured_errors";
 import { Logger } from "../shared/interfaces";
 import { grey, grey2 } from "../shared/utils/colors";
@@ -108,13 +109,10 @@ export class FlutterDebugSession extends DartDebugSession {
 		});
 
 		this.runDaemon.registerForAppProgress((e) => {
-			// We're ignoring finish progress events because we use a single ID for progress
-			// to avoid multiple progress indicators and don't want to hide the overall progress
-			// when the first step completes.
-			//
-			// We'll hide the overall progress when we connect to the VM service.
-			if (!e.finished && e.message)
-				this.sendEvent(new ProgressUpdateEvent(debugLaunchProgressId, e.message));
+			if (!this.appHasStarted)
+				this.sendLaunchProgressEvent(e);
+			else
+				this.sendProgressEvent(e);
 		});
 		this.runDaemon.registerForAppWebLaunchUrl((e) => this.sendEvent(new Event("dart.webLaunchUrl", { url: e.url, launched: e.launched })));
 		// TODO: Should this use logToUser?
@@ -123,6 +121,32 @@ export class FlutterDebugSession extends DartDebugSession {
 		this.runDaemon.registerForAppLog((msg) => this.handleLogOutput(msg.log, msg.error));
 
 		return this.runDaemon.process;
+	}
+
+	private sendLaunchProgressEvent(e: AppProgress) {
+		// We ignore finish progress events for launch progress because we use a
+		// single ID for launch progress to avoid multiple progress indicators and
+		// don't want to hide the overall progress when the first step completes.
+		//
+		// We'll hide the overall launch progress when we connect to the VM service.
+		if (!e.finished && e.message)
+			this.updateProgress(debugLaunchProgressId, e.message);
+	}
+
+	private sendProgressEvent(e: AppProgress) {
+		const progressID = `flutter-${e.appId}-${e.progressId}`;
+		if (e.finished) {
+			let finalMessage: string | undefined;
+			if (!finalMessage) {
+				if (e.progressId === "hot.reload")
+					finalMessage = "Hot Reload complete!";
+				else if (e.progressId === "hot.restart")
+					finalMessage = "Hot Restart complete!";
+			}
+			this.endProgress(progressID, finalMessage);
+		} else {
+			this.startProgress(progressID, e.message);
+		}
 	}
 
 	private handleLogOutput(msg: string, forceErrorCategory = false) {
@@ -139,7 +163,7 @@ export class FlutterDebugSession extends DartDebugSession {
 			// This text comes through as stdout and not Progress, so map it over
 			// to progress indicator.
 			if (msg.indexOf("Waiting for connection from") !== -1) {
-				this.sendEvent(new ProgressUpdateEvent(debugLaunchProgressId, msg));
+				this.updateProgress(debugLaunchProgressId, msg.trim());
 			}
 
 			this.logToUser(msg, forceErrorCategory ? "stderr" : this.outputCategory);
@@ -339,7 +363,7 @@ export class FlutterDebugSession extends DartDebugSession {
 				const file = loc.file;
 				const line = loc.line;
 				const column = loc.column;
-				this.sendEvent(new Event("dart.navigate", { file, line, column }));
+				this.sendEvent(new Event("dart.navigate", { file, line, column, inOtherEditorColumn: true }));
 			} else {
 				await super.handleInspectEvent(event);
 			}

@@ -36,24 +36,45 @@ export abstract class StdIOService<T> implements IAmDisposable {
 
 		this.logTraffic(`    PID: ${process.pid}`);
 
-		this.process.stdout.on("data", (data: Buffer | string) => {
-			// Add this message to the buffer for processing.
-			this.messageBuffers.push(Buffer.isBuffer(data) ? data : Buffer.from(data));
+		this.process.stdout.on("data", (data: Buffer | string) => this.handleStdOut(data));
+		this.process.stderr.on("data", (data: Buffer | string) => this.handleStdErr(data));
+		this.process.on("exit", (code, signal) => this.handleExit(code, signal));
+		this.process.on("error", (error) => this.handleError(error));
+	}
 
-			// Kick off processing if we have a full message.
-			if (data.toString().indexOf("\n") >= 0)
-				this.processMessageBuffer();
-		});
-		this.process.stderr.on("data", (data: Buffer | string) => {
-			this.logTraffic(`${data.toString()}`, true);
-		});
-		this.process.on("exit", (code, signal) => {
-			this.logTraffic(`Process terminated! ${code}, ${signal}`);
-			this.processExited = true;
-		});
-		this.process.on("error", (error) => {
-			this.logTraffic(`Process errored! ${error}`);
-		});
+	/// Flutter may send only \r as a line terminator for improved terminal output
+	/// but we should always treat this as a standard newline (eg. terminating a message)
+	/// so all \r's can be replaced with \n immediately. Blank lines (from \n\n)
+	/// are already handled gracefully.
+	///
+	/// https://github.com/flutter/flutter/pull/57590
+	private normalizeNewlines(data: Buffer | string): Buffer {
+		const normalised = data.toString().replace(/\r/g, "\n");
+		return Buffer.from(normalised);
+	}
+
+	protected handleStdOut(data: Buffer | string) {
+		data = this.normalizeNewlines(data);
+
+		// Add this message to the buffer for processing.
+		this.messageBuffers.push(data);
+
+		// Kick off processing if we have a full message.
+		if (data.indexOf("\n") >= 0)
+			this.processMessageBuffer();
+	}
+
+	protected handleStdErr(data: Buffer | string) {
+		this.logTraffic(`${data.toString()}`, true);
+	}
+
+	protected handleExit(code: number | null, signal: NodeJS.Signals | null) {
+		this.logTraffic(`Process terminated! ${code}, ${signal}`);
+		this.processExited = true;
+	}
+
+	protected handleError(error: Error) {
+		this.logTraffic(`Process errored! ${error}`);
 	}
 
 	protected buildRequest<TReq>(id: number, method: string, params?: TReq): { id: string, method: string, params?: TReq } {
@@ -84,7 +105,7 @@ export abstract class StdIOService<T> implements IAmDisposable {
 		Object.keys(this.activeRequests).forEach((key) => this.activeRequests[key] = "CANCELLED");
 	}
 
-	protected sendMessage<T>(json: string) {
+	protected sendMessage(json: string) {
 		this.logTraffic(`==> ${json}`);
 		if (this.process)
 			this.process.stdin.write(json);
@@ -110,14 +131,13 @@ export abstract class StdIOService<T> implements IAmDisposable {
 
 	protected abstract shouldHandleMessage(message: string): boolean;
 	// tslint:disable-next-line:no-empty
-	protected processUnhandledMessage(message: string): void { }
+	protected async processUnhandledMessage(message: string): Promise<void> { }
 
 	public async handleMessage(message: string): Promise<void> {
 		this.logTraffic(`<== ${message.trimRight()}\r\n`);
 
 		if (!this.shouldHandleMessage(message.trim())) {
-			this.processUnhandledMessage(message);
-			return;
+			return this.processUnhandledMessage(message);
 		}
 
 		let msg: any;
@@ -129,8 +149,7 @@ export abstract class StdIOService<T> implements IAmDisposable {
 		} catch (e) {
 			if (this.treatHandlingErrorsAsUnhandledMessages) {
 				this.logger.error(`Unexpected non-JSON message, assuming normal stdout (${e})\n\n${e.stack}\n\n${message}`);
-				this.processUnhandledMessage(message);
-				return;
+				return this.processUnhandledMessage(message);
 			} else {
 				throw e;
 			}
@@ -138,26 +157,27 @@ export abstract class StdIOService<T> implements IAmDisposable {
 
 		try {
 			if (msg && this.isNotification(msg))
-				this.handleNotification(msg as T);
+				// tslint:disable-next-line: no-floating-promises
+				this.handleNotification(msg as T).catch((e) => this.logger.error(e));
 			else if (msg && this.isRequest(msg))
-				await this.processServerRequest(msg as Request<any>);
+				this.processServerRequest(msg as Request<any>).catch((e) => this.logger.error(e));
 			else if (msg && this.isResponse(msg))
-				this.handleResponse(msg as UnknownResponse);
+				this.handleResponse(msg as UnknownResponse).catch((e) => this.logger.error(e));
 			else {
 				this.logger.error(`Unexpected JSON message, assuming normal stdout : ${message}`);
-				this.processUnhandledMessage(message);
+				this.processUnhandledMessage(message).catch((e) => this.logger.error(e));
 			}
 		} catch (e) {
 			if (this.treatHandlingErrorsAsUnhandledMessages) {
 				this.logger.error(`Failed to handle JSON message, assuming normal stdout (${e})\n\n${e.stack}\n\n${message}`);
-				this.processUnhandledMessage(message);
+				this.processUnhandledMessage(message).catch((e) => this.logger.error(e));
 			} else {
 				throw e;
 			}
 		}
 	}
 
-	protected abstract handleNotification(evt: T): void;
+	protected abstract handleNotification(evt: T): Promise<void>;
 	// tslint:disable-next-line: no-empty
 	protected async handleRequest(method: string, args: any): Promise<any> { }
 	protected isNotification(msg: any): boolean { return !!msg.event; }
@@ -179,7 +199,7 @@ export abstract class StdIOService<T> implements IAmDisposable {
 		this.sendMessage(json);
 	}
 
-	private handleResponse(evt: UnknownResponse) {
+	private async handleResponse(evt: UnknownResponse): Promise<void> {
 		const handler = this.activeRequests[evt.id];
 		delete this.activeRequests[evt.id];
 
@@ -195,18 +215,18 @@ export abstract class StdIOService<T> implements IAmDisposable {
 
 		if (error && error.code === "SERVER_ERROR") {
 			error.method = method;
-			this.notify(this.requestErrorSubscriptions, error);
+			this.notify(this.requestErrorSubscriptions, error).catch((e) => this.logger.error(e));
 		}
 
 		if (error) {
-			handler[1](error);
+			await handler[1](error);
 		} else {
-			handler[0](evt.result);
+			await handler[0](evt.result);
 		}
 	}
 
-	protected notify<T>(subscriptions: Array<(notification: T) => void>, notification: T): void {
-		Promise.all(subscriptions.slice().map((sub) => sub(notification))).catch((e) => console.error(e));
+	protected notify<T>(subscriptions: Array<(notification: T) => void>, notification: T): Promise<unknown> {
+		return Promise.all(subscriptions.slice().map((sub) => sub(notification))).catch((e) => console.error(e));
 	}
 
 	protected subscribe<T>(subscriptions: Array<(notification: T) => void>, subscriber: (notification: T) => void): IAmDisposable {
@@ -288,6 +308,7 @@ export abstract class StdIOService<T> implements IAmDisposable {
 				this.logger.error({ message: e.toString() });
 			}
 		});
+		this.disposables.length = 0;
 
 		// Clear log file so if any more log events come through later, we don't
 		// create a new log file and overwrite what we had.
